@@ -71,12 +71,14 @@ jobs:
     continue-on-error: true
     strategy:
       matrix:
-        os: [ ubuntu-22.04, ubuntu-22.04-arm, windows-2022, macos-13, macos-14 ]
+        os: [ ubuntu-22.04, ubuntu-22.04-arm, windows-2022, windows-2025, macos-13, macos-14 ]
         python-version: [ "3.12", "3.13" ]
         exclude:
           - os: ubuntu-22.04
             python-version: "3.12"
           - os: windows-2022
+            python-version: "3.13"
+          - os: windows-2025
             python-version: "3.12"
           - os: macos-13
             python-version: "3.12"
@@ -89,9 +91,10 @@ jobs:
       PYSIDE6_LEGACY_VERSION: "6.4.3"
       PYSIDE6_TARGET_VERSION: "6.8.3"
       # PySide6 has Windows ARM64 build since 6.9.0
-      PYSIDE6_LATEST_VERSION: "6.9.0"
+      PYSIDE6_LATEST_VERSION: "6.9.1"
+      PYTHON_IN_WIN7_VERSION: "3.12.11"
     steps:
-      - name: Set platform environment variables version
+      - name: Set platform environment variables
         run: |
           echo "PYSIDE6_Windows_X64_TARGET_VERSION=$PYSIDE6_TARGET_VERSION" >> $GITHUB_ENV
           echo "PYSIDE6_Windows_ARM64_TARGET_VERSION=$PYSIDE6_LATEST_VERSION" >> $GITHUB_ENV
@@ -141,6 +144,35 @@ jobs:
           wget -P .linuxdeploy-bin https://github.com/AppImage/appimagetool/releases/latest/download/appimagetool-$MAPPED_RUNNER_ARCH.AppImage
           chmod +x .linuxdeploy-bin/*
         if: runner.os == 'Linux'
+      - name: Remove pre-installed Python from PATH (PowerShell)
+        shell: pwsh
+        run: |
+          $pythonPath = (Get-Command python).Source
+          Write-Host "Found python at $pythonPath"
+
+          $pythonDir = Split-Path $pythonPath
+          Write-Host "Python directory: $pythonDir"
+
+          # Filter out $pythonDir from $env:Path
+          $newPath = ($env:Path -split ';' | Where-Object { $_ -notlike "$pythonDir*" }) -join ';'
+          Write-Host "New PATH: $newPath"
+
+          # Export cleaned PATH to GitHub Actions environment
+          "PATH=$newPath" >> $env:GITHUB_ENV
+        if: matrix.os == 'windows-2022'
+      - name: Set up Python for Windows7
+        shell: cmd
+        run: |
+          curl -L -o python-%PYTHON_IN_WIN7_VERSION%-amd64-full.exe https://github.com/adang1345/PythonWin7/raw/refs/heads/master/%PYTHON_IN_WIN7_VERSION%/python-%PYTHON_IN_WIN7_VERSION%-amd64-full.exe
+          start /wait python-%PYTHON_IN_WIN7_VERSION%-amd64-full.exe /quiet InstallAllUsers=1 PrependPath=1 Include_launcher=1
+          echo C:/Program Files/Python312 >> %GITHUB_PATH%
+          echo C:/Program Files/Python312/Scripts >> %GITHUB_PATH%
+        if: matrix.os == 'windows-2022'
+      - name: Add Python to Path
+        run: |
+          echo "C:/Program Files/Python312" >> $GITHUB_PATH
+          echo "C:/Program Files/Python312/Scripts" >> $GITHUB_PATH
+        if: matrix.os == 'windows-2022'
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
@@ -148,6 +180,7 @@ jobs:
           # Support Windows ARM64 build
           architecture: ${{ runner.arch == 'ARM64' && 'arm64' || 'x64' }}
           check-latest: true
+        if: matrix.os != 'windows-2022'
       - name: Set up Python venv
         run: |
           if [ "$RUNNER_OS" == "macOS" ] || [ "$RUNNER_OS" == "Linux" ]; then
@@ -162,6 +195,20 @@ jobs:
           fi
           python -c "import sys; print(sys.version)"
           python -m pip install --upgrade pip
+      - name: Set up PySide6 for Win7
+        run: |
+          python -c "import sys; print(sys.version)"
+          python -m pip install PySide6-Essentials==$PYSIDE6_TARGET_VERSION
+          curl -L -o qt6_x64_to_run_on_windows7.7z https://github.com/crystalidea/qt6windows7/releases/download/v$PYSIDE6_TARGET_VERSION/qt6_x64_to_run_on_windows7.7z
+          7z x qt6_x64_to_run_on_windows7.7z -oqt6_x64_to_run_on_windows7 -y
+          cd qt6_x64_to_run_on_windows7
+          mkdir plugins
+          mv imageformats platforms styles plugins
+          cd ..
+          ls .venv
+          ls .venv/Lib/site-packages
+          cp -r qt6_x64_to_run_on_windows7/* .venv/Lib/site-packages/PySide6/
+        if: matrix.os == 'windows-2022'
       - name: Download Python dependencies & latest asset files
         run: |
           python -m pip install setuptools wheel
@@ -208,6 +255,15 @@ jobs:
           # Support Windows ARM64 build
           architecture: ${{ runner.arch == 'ARM64' && 'arm64' || 'x64' }}
           check-latest: true
+        if: matrix.os != 'windows-2022'
+      - name: Set up go for Win7
+        run: |
+          curl -L -o go-for-win7-windows-amd64.zip https://github.com/XTLS/go-win7/releases/latest/download/go-for-win7-windows-amd64.zip
+          7z x go-for-win7-windows-amd64.zip -ogo-for-win7-windows-amd64 -y
+          echo "$PWD/go-for-win7-windows-amd64/bin" >> $GITHUB_PATH
+          echo "WIN_VER_COMPATIBLE=windows7" >> $GITHUB_ENV
+          echo "CGO_ENABLED=1" >> $GITHUB_ENV
+        if: matrix.os == 'windows-2022'
       - name: Install go dependencies
         run: |
           go version
